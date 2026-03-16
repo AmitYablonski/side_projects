@@ -601,11 +601,7 @@ const defaultState = () => ({
   settings: {
     originalAmount: 177000,
     interestRate: 2,
-    startDate: (() => {
-      const d = new Date();
-      d.setFullYear(d.getFullYear() - 5);
-      return d.toISOString().split('T')[0];
-    })()
+    startDate: '2020-08-01'
   },
   payments: []
 });
