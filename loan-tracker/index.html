@@ -547,12 +547,29 @@
         <div class="section-title">Data Management</div>
         <p style="font-size:13px;color:var(--muted);margin-bottom:14px">
           Export your data as a JSON backup. Import to restore from a previous backup.
-          All data is stored locally in your browser's localStorage.
+            Data syncs automatically to GitHub. Export/import as backup.
         </p>
         <div style="display:flex;gap:10px;flex-wrap:wrap">
           <button class="btn btn-outline" onclick="exportData()">↑ Export JSON</button>
           <button class="btn btn-ghost" onclick="document.getElementById('import-file').click()">↓ Import JSON</button>
           <button class="btn btn-danger btn-sm" onclick="clearAllData()" style="margin-left:auto">🗑 Clear All Data</button>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:16px">
+        <div class="section-title">GitHub Sync</div>
+        <p style="font-size:13px;color:var(--muted);margin-bottom:14px">
+          Your data is saved to GitHub automatically. Enter your Personal Access Token once per device — it stays in your browser only.
+        </p>
+        <div class="form-group">
+          <label for="gh-pat">GitHub Personal Access Token</label>
+          <input type="password" id="gh-pat" placeholder="github_pat_..." style="font-family:monospace;font-size:12px">
+          <div class="form-hint">Needs <code>repo</code> scope (read + write). <a href="https://github.com/settings/tokens" target="_blank" style="color:var(--accent)">Generate one here</a>.</div>
+        </div>
+        <div style="display:flex;gap:10px;margin-top:8px;align-items:center">
+          <button class="btn btn-primary" onclick="savePat()">Save Token</button>
+          <button class="btn btn-ghost" onclick="clearPat()">Remove Token</button>
+          <span id="gh-status" style="font-size:12px;color:var(--muted);margin-left:4px"></span>
         </div>
       </div>
     </div>
@@ -595,7 +612,12 @@
 // ╔══════════════════════════════════════════════════════════════╗
 // ║  STATE                                                       ║
 // ╚══════════════════════════════════════════════════════════════╝
-const STORAGE_KEY = 'loan-tracker-v2';
+const STORAGE_KEY    = 'loan-tracker-v2';
+const GH_PAT_KEY     = 'loan-tracker-gh-pat';
+const GH_OWNER       = 'AmitYablonski';
+const GH_REPO        = 'side_projects';
+const GH_DATA_PATH   = 'loan-tracker/data.json';
+const GH_API_BASE    = `https://api.github.com/repos/${GH_OWNER}/${GH_REPO}/contents/${GH_DATA_PATH}`;
 
 const defaultState = () => ({
   settings: {
@@ -607,7 +629,134 @@ const defaultState = () => ({
 });
 
 let S = defaultState();
+let _ghSha = null;       // current SHA of data.json in GitHub (needed for updates)
+let _saveTimer = null;   // debounce handle
 
+// ── GitHub PAT helpers ──────────────────────────────────────────
+function getPat() { return localStorage.getItem(GH_PAT_KEY) || ''; }
+
+function savePat() {
+  const val = document.getElementById('gh-pat').value.trim();
+  if (!val) { toast('⚠ Token is empty'); return; }
+  localStorage.setItem(GH_PAT_KEY, val);
+  document.getElementById('gh-pat').value = '';
+  toast('Token saved ✓');
+  setGhStatus('Token saved — syncing…', 'var(--accent)');
+  ghLoad().then(() => { renderAll(); loadSettingsForm(); });
+}
+
+function clearPat() {
+  localStorage.removeItem(GH_PAT_KEY);
+  setGhStatus('Token removed', 'var(--muted)');
+  toast('GitHub token removed');
+}
+
+function setGhStatus(msg, color) {
+  const el = document.getElementById('gh-status');
+  if (el) { el.textContent = msg; el.style.color = color || 'var(--muted)'; }
+}
+
+// ── GitHub API: load ────────────────────────────────────────────
+async function ghLoad() {
+  const pat = getPat();
+  if (!pat) { setGhStatus('No token — data stored locally only', ''); return false; }
+
+  try {
+    setGhStatus('Syncing…', 'var(--accent)');
+    const res = await fetch(GH_API_BASE, {
+      headers: { Authorization: `Bearer ${pat}`, Accept: 'application/vnd.github+json' }
+    });
+
+    if (res.status === 404) {
+      // File doesn't exist yet — start fresh, will be created on first save
+      setGhStatus('No cloud data yet — will create on first save', 'var(--muted)');
+      _ghSha = null;
+      return false;
+    }
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.message || `HTTP ${res.status}`);
+    }
+
+    const json = await res.json();
+    _ghSha = json.sha;
+    const decoded = JSON.parse(atob(json.content.replace(/\n/g, '')));
+    if (decoded?.settings?.originalAmount != null && Array.isArray(decoded?.payments)) {
+      S = decoded;
+      // Also keep localStorage in sync as fallback
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(S));
+      setGhStatus('Synced ✓', '#22c55e');
+      return true;
+    } else {
+      throw new Error('Unexpected data format in GitHub');
+    }
+  } catch(e) {
+    console.error('ghLoad error:', e);
+    setGhStatus(`Sync error: ${e.message}`, '#ef4444');
+    return false;
+  }
+}
+
+// ── GitHub API: save ────────────────────────────────────────────
+async function ghSave() {
+  const pat = getPat();
+  if (!pat) return; // no token = local only
+
+  try {
+    setGhStatus('Saving…', 'var(--accent)');
+    const content = btoa(unescape(encodeURIComponent(JSON.stringify(S, null, 2))));
+    const body = {
+      message: `Update loan data – ${new Date().toISOString().slice(0,10)}`,
+      content,
+      ..._ghSha ? { sha: _ghSha } : {}
+    };
+
+    const res = await fetch(GH_API_BASE, {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${pat}`,
+        Accept: 'application/vnd.github+json',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(body)
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      // If conflict (SHA mismatch), re-fetch SHA and retry once
+      if (res.status === 409 || res.status === 422) {
+        await refreshSha();
+        await ghSave();
+        return;
+      }
+      throw new Error(err.message || `HTTP ${res.status}`);
+    }
+
+    const json = await res.json();
+    _ghSha = json.content?.sha || _ghSha;
+    setGhStatus('Saved to GitHub ✓', '#22c55e');
+  } catch(e) {
+    console.error('ghSave error:', e);
+    setGhStatus(`Save error: ${e.message}`, '#ef4444');
+  }
+}
+
+async function refreshSha() {
+  const pat = getPat();
+  if (!pat) return;
+  try {
+    const res = await fetch(GH_API_BASE, {
+      headers: { Authorization: `Bearer ${pat}`, Accept: 'application/vnd.github+json' }
+    });
+    if (res.ok) {
+      const json = await res.json();
+      _ghSha = json.sha;
+    }
+  } catch(e) {}
+}
+
+// ── Local load/save (fallback + cache) ─────────────────────────
 function load() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -616,7 +765,21 @@ function load() {
 }
 
 function save() {
+  // Always write to localStorage immediately
   localStorage.setItem(STORAGE_KEY, JSON.stringify(S));
+  // Debounce GitHub save (1.5s) to avoid hammering the API
+  clearTimeout(_saveTimer);
+  _saveTimer = setTimeout(ghSave, 1500);
+}
+
+// ── Init PAT field ──────────────────────────────────────────────
+function initGhStatus() {
+  const pat = getPat();
+  if (pat) {
+    setGhStatus('Token configured', '#22c55e');
+  } else {
+    setGhStatus('No token — data stored locally only', 'var(--muted)');
+  }
 }
 
 // ╔══════════════════════════════════════════════════════════════╗
@@ -1192,9 +1355,20 @@ document.addEventListener('keydown', e => {
 // ║  INIT                                                        ║
 // ╚══════════════════════════════════════════════════════════════╝
 
+// Load local data first for instant render, then sync from GitHub
 load();
 loadSettingsForm();
 renderAll();
+initGhStatus();
+
+// Async GitHub sync — update UI when done
+(async () => {
+  const synced = await ghLoad();
+  if (synced) {
+    renderAll();
+    loadSettingsForm();
+  }
+})();
 </script>
 </body>
 </html>
