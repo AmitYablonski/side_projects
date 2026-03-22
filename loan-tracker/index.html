@@ -659,13 +659,12 @@ function setGhStatus(msg, color) {
 // ── GitHub API: load ────────────────────────────────────────────
 async function ghLoad() {
   const pat = getPat();
-  if (!pat) { setGhStatus('No token — data stored locally only', ''); return false; }
-
+  // Public repo — reads work without a token; token only needed for writes
   try {
     setGhStatus('Syncing…', 'var(--accent)');
-    const res = await fetch(GH_API_BASE, {
-      headers: { Authorization: `Bearer ${pat}`, Accept: 'application/vnd.github+json' }
-    });
+    const headers = { Accept: 'application/vnd.github+json' };
+    if (pat) headers.Authorization = `Bearer ${pat}`;
+    const res = await fetch(GH_API_BASE, { headers });
 
     if (res.status === 404) {
       // File doesn't exist yet — start fresh, will be created on first save
