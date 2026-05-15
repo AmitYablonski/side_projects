@@ -641,8 +641,8 @@ function savePat() {
   localStorage.setItem(GH_PAT_KEY, val);
   document.getElementById('gh-pat').value = '';
   toast('Token saved ✓');
-  setGhStatus('Token saved — syncing…', 'var(--accent)');
-  ghLoad().then(() => { renderAll(); loadSettingsForm(); });
+  setGhStatus('Token saved — will sync on next change', 'var(--accent)');
+  // Don't ghLoad() here — it overwrites local payments!
 }
 
 function clearPat() {
@@ -1354,19 +1354,24 @@ document.addEventListener('keydown', e => {
 // ║  INIT                                                        ║
 // ╚══════════════════════════════════════════════════════════════╝
 
-// Load local data first for instant render, then sync from GitHub
+// Load local data first for instant render
 load();
 loadSettingsForm();
 renderAll();
 initGhStatus();
 
-// Async GitHub sync — update UI when done
+// Async GitHub sync — only use cloud if no local payments
 (async () => {
-  const synced = await ghLoad();
-  if (synced) {
-    renderAll();
-    loadSettingsForm();
+  const hasPayments = S?.payments?.length > 0;
+  if (!hasPayments) {
+    // No payments yet — try cloud
+    const synced = await ghLoad();
+    if (synced) {
+      renderAll();
+      loadSettingsForm();
+    }
   }
+  // If we have payments, skip cloud load to avoid overwriting new data
 })();
 </script>
 </body>
