@@ -1261,6 +1261,9 @@ function savePayment() {
   }
 
   save();
+  // Push to GitHub immediately so edits persist across devices
+  clearTimeout(_saveTimer);
+  ghSave();
   renderAll();
   closeModal();
   toast(id ? 'Payment updated ✓' : 'Payment added ✓');
