@@ -1360,18 +1360,13 @@ loadSettingsForm();
 renderAll();
 initGhStatus();
 
-// Async GitHub sync — only use cloud if no local payments
+// Always sync with GitHub on load to get latest data
 (async () => {
-  const hasPayments = S?.payments?.length > 0;
-  if (!hasPayments) {
-    // No payments yet — try cloud
-    const synced = await ghLoad();
-    if (synced) {
-      renderAll();
-      loadSettingsForm();
-    }
+  const synced = await ghLoad();
+  if (synced) {
+    renderAll();
+    loadSettingsForm();
   }
-  // If we have payments, skip cloud load to avoid overwriting new data
 })();
 </script>
 </body>
