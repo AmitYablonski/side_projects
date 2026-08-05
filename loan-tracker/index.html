@@ -769,7 +769,13 @@ function save() {
   // Debounce GitHub save (1.5s) to avoid hammering the API
   clearTimeout(_saveTimer);
   _saveTimer = setTimeout(ghSave, 1500);
-}
+  }
+
+  // ── ghSaveSync: immediate save without debounce (used after critical edits) ──
+  async function ghSaveSync() {
+  clearTimeout(_saveTimer);
+  await ghSave();
+  }
 
 // ── Init PAT field ──────────────────────────────────────────────
 function initGhStatus() {
@@ -1205,6 +1211,7 @@ function saveSettings() {
 
   S.settings = { originalAmount: amount, interestRate: rate, startDate: start };
   save();
+  ghSaveSync();
   renderAll();
   toast('Settings saved ✓');
 }
@@ -1263,7 +1270,7 @@ function savePayment() {
   save();
   // Push to GitHub immediately so edits persist across devices
   clearTimeout(_saveTimer);
-  ghSave();
+  ghSaveSync();
   renderAll();
   closeModal();
   toast(id ? 'Payment updated ✓' : 'Payment added ✓');
@@ -1273,6 +1280,7 @@ function deletePayment(id) {
   if (!confirm('Delete this payment? This cannot be undone.')) return;
   S.payments = S.payments.filter(p => p.id !== id);
   save();
+  ghSaveSync();
   renderAll();
   toast('Payment deleted');
 }
@@ -1363,14 +1371,18 @@ loadSettingsForm();
 renderAll();
 initGhStatus();
 
-// Always sync with GitHub on load to get latest data
-(async () => {
-  const synced = await ghLoad();
-  if (synced) {
-    renderAll();
-    loadSettingsForm();
-  }
-})();
+// Only sync from GitHub if localStorage is empty (first visit on a device)
+// Otherwise local data is more recent (ghSave may not have fired yet)
+const raw = localStorage.getItem(STORAGE_KEY);
+if (!raw) {
+  (async () => {
+    const synced = await ghLoad();
+    if (synced) {
+      renderAll();
+      loadSettingsForm();
+    }
+  })();
+}
 </script>
 </body>
 </html>
